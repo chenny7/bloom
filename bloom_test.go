@@ -573,12 +573,12 @@ func TestTestLocations(t *testing.T) {
 	n3 := []byte("in")
 	n4 := []byte("bloom")
 	f.Add(n1)
-	n3a := f.TestLocations(Locations(n3, f.K()))
+	n3a := f.TestLocations(f.Locations(n3))
 	f.Add(n3)
-	n1b := f.TestLocations(Locations(n1, f.K()))
-	n2b := f.TestLocations(Locations(n2, f.K()))
-	n3b := f.TestLocations(Locations(n3, f.K()))
-	n4b := f.TestLocations(Locations(n4, f.K()))
+	n1b := f.TestLocations(f.Locations(n1))
+	n2b := f.TestLocations(f.Locations(n2))
+	n3b := f.TestLocations(f.Locations(n3))
+	n4b := f.TestLocations(f.Locations(n4))
 	if !n1b {
 		t.Errorf("%v should be in.", n1)
 	}

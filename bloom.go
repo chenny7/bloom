@@ -55,6 +55,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sync"
 
 	"github.com/spaolacci/murmur3"
 	"github.com/willf/bitset"
@@ -64,9 +65,11 @@ import (
 // requirement is to make membership queries; _i.e._, whether an item is a
 // member of a set.
 type BloomFilter struct {
-	m uint
-	k uint
-	b *bitset.BitSet
+	m     uint
+	k     uint
+	b     *bitset.BitSet
+	count uint64
+	lock  sync.RWMutex
 }
 
 func max(x, y uint) uint {
@@ -79,14 +82,14 @@ func max(x, y uint) uint {
 // New creates a new Bloom filter with _m_ bits and _k_ hashing functions
 // We force _m_ and _k_ to be at least one to avoid panics.
 func New(m uint, k uint) *BloomFilter {
-	return &BloomFilter{max(1, m), max(1, k), bitset.New(m)}
+	return &BloomFilter{max(1, m), max(1, k), bitset.New(m), 0, sync.RWMutex{}}
 }
 
 // From creates a new Bloom filter with len(_data_) * 64 bits and _k_ hashing
 // functions. The data slice is not going to be reset.
 func From(data []uint64, k uint) *BloomFilter {
 	m := uint(len(data) * 64)
-	return &BloomFilter{m, k, bitset.From(data)}
+	return &BloomFilter{m, k, bitset.From(data), 0, sync.RWMutex{}}
 }
 
 // baseHashes returns the four hash values of data that are used to create k
@@ -140,12 +143,13 @@ func (f *BloomFilter) K() uint {
 	return f.k
 }
 
+func (f *BloomFilter) Count() uint64 {
+	return f.count
+}
+
 // Add data to the Bloom Filter. Returns the filter (allows chaining)
 func (f *BloomFilter) Add(data []byte) *BloomFilter {
-	h := baseHashes(data)
-	for i := uint(0); i < f.k; i++ {
-		f.b.Set(f.location(h, i))
-	}
+	f.SetLocations(f.Locations(data))
 	return f
 }
 
@@ -160,7 +164,11 @@ func (f *BloomFilter) Merge(g *BloomFilter) error {
 		return fmt.Errorf("k's don't match: %d != %d", f.m, g.m)
 	}
 
+	f.lock.Lock()
+	defer f.lock.Unlock()
+
 	f.b.InPlaceUnion(g.b)
+	f.count += g.count // duplicated key may got count more than real value
 	return nil
 }
 
@@ -180,13 +188,7 @@ func (f *BloomFilter) AddString(data string) *BloomFilter {
 // If true, the result might be a false positive. If false, the data
 // is definitely not in the set.
 func (f *BloomFilter) Test(data []byte) bool {
-	h := baseHashes(data)
-	for i := uint(0); i < f.k; i++ {
-		if !f.b.Test(f.location(h, i)) {
-			return false
-		}
-	}
-	return true
+	return f.TestLocations(f.Locations(data))
 }
 
 // TestString returns true if the string is in the BloomFilter, false otherwise.
@@ -198,28 +200,49 @@ func (f *BloomFilter) TestString(data string) bool {
 
 // TestLocations returns true if all locations are set in the BloomFilter, false
 // otherwise.
-func (f *BloomFilter) TestLocations(locs []uint64) bool {
+func (f *BloomFilter) TestLocations(locs []uint) bool {
+	f.lock.RLock()
+	defer f.lock.RUnlock()
+
 	for i := 0; i < len(locs); i++ {
-		if !f.b.Test(uint(locs[i] % uint64(f.m))) {
+		if !f.b.Test(locs[i]) {
 			return false
 		}
 	}
 	return true
 }
 
+func (f *BloomFilter) SetLocations(locs []uint) {
+	f.lock.Lock()
+	defer f.lock.Unlock()
+
+	for i := 0; i < len(locs); i++ {
+		f.b.Set(locs[i])
+	}
+	f.count++
+}
+
+func (f *BloomFilter) TestAndSetLocations(locs []uint) bool {
+	f.lock.Lock()
+	defer f.lock.Unlock()
+
+	present := true
+	for i := 0; i < len(locs); i++ {
+		if !f.b.Test(locs[i]) {
+			present = false
+			f.b.Set(locs[i])
+		}
+	}
+	if !present {
+		f.count++
+	}
+	return present
+}
+
 // TestAndAdd is the equivalent to calling Test(data) then Add(data).
 // Returns the result of Test.
 func (f *BloomFilter) TestAndAdd(data []byte) bool {
-	present := true
-	h := baseHashes(data)
-	for i := uint(0); i < f.k; i++ {
-		l := f.location(h, i)
-		if !f.b.Test(l) {
-			present = false
-		}
-		f.b.Set(l)
-	}
-	return present
+	return f.TestAndSetLocations(f.Locations(data))
 }
 
 // TestAndAddString is the equivalent to calling Test(string) then Add(string).
@@ -230,7 +253,11 @@ func (f *BloomFilter) TestAndAddString(data string) bool {
 
 // ClearAll clears all the data in a Bloom filter, removing all keys
 func (f *BloomFilter) ClearAll() *BloomFilter {
+	f.lock.Lock()
+	defer f.lock.Unlock()
+
 	f.b.ClearAll()
+	f.count = 0
 	return f
 }
 
@@ -349,13 +376,13 @@ func (f *BloomFilter) Equal(g *BloomFilter) bool {
 }
 
 // Locations returns a list of hash locations representing a data item.
-func Locations(data []byte, k uint) []uint64 {
-	locs := make([]uint64, k)
+func (f *BloomFilter) Locations(data []byte) []uint {
+	locs := make([]uint, f.k)
 
 	// calculate locations
 	h := baseHashes(data)
-	for i := uint(0); i < k; i++ {
-		locs[i] = location(h, i)
+	for i := uint(0); i < f.k; i++ {
+		locs[i] = f.location(h, i)
 	}
 
 	return locs
