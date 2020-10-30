@@ -144,6 +144,8 @@ func (f *BloomFilter) K() uint {
 }
 
 func (f *BloomFilter) Count() uint64 {
+	f.lock.RLock()
+	defer f.lock.RUnlock()
 	return f.count
 }
 
@@ -289,10 +291,10 @@ func (f *BloomFilter) EstimateFalsePositiveRate(n uint) (fpRate float64) {
 
 // bloomFilterJSON is an unexported type for marshaling/unmarshaling BloomFilter struct.
 type bloomFilterJSON struct {
-	M uint           `json:"m"`
-	K uint           `json:"k"`
-	B *bitset.BitSet `json:"b"`
-	Count uint64     `json:"count"`
+	M     uint           `json:"m"`
+	K     uint           `json:"k"`
+	B     *bitset.BitSet `json:"b"`
+	Count uint64         `json:"count"`
 }
 
 // MarshalJSON implements json.Marshaler interface.
