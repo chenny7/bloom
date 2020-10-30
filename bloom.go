@@ -292,11 +292,12 @@ type bloomFilterJSON struct {
 	M uint           `json:"m"`
 	K uint           `json:"k"`
 	B *bitset.BitSet `json:"b"`
+	Count uint64     `json:"count"`
 }
 
 // MarshalJSON implements json.Marshaler interface.
 func (f *BloomFilter) MarshalJSON() ([]byte, error) {
-	return json.Marshal(bloomFilterJSON{f.m, f.k, f.b})
+	return json.Marshal(bloomFilterJSON{f.m, f.k, f.b, f.count})
 }
 
 // UnmarshalJSON implements json.Unmarshaler interface.
@@ -309,6 +310,7 @@ func (f *BloomFilter) UnmarshalJSON(data []byte) error {
 	f.m = j.M
 	f.k = j.K
 	f.b = j.B
+	f.count = j.Count
 	return nil
 }
 
@@ -323,20 +325,28 @@ func (f *BloomFilter) WriteTo(stream io.Writer) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
+	err = binary.Write(stream, binary.BigEndian, f.count)
+	if err != nil {
+		return 0, err
+	}
 	numBytes, err := f.b.WriteTo(stream)
-	return numBytes + int64(2*binary.Size(uint64(0))), err
+	return numBytes + int64(3*binary.Size(uint64(0))), err
 }
 
 // ReadFrom reads a binary representation of the BloomFilter (such as might
 // have been written by WriteTo()) from an i/o stream. It returns the number
 // of bytes read.
 func (f *BloomFilter) ReadFrom(stream io.Reader) (int64, error) {
-	var m, k uint64
+	var m, k, count uint64
 	err := binary.Read(stream, binary.BigEndian, &m)
 	if err != nil {
 		return 0, err
 	}
 	err = binary.Read(stream, binary.BigEndian, &k)
+	if err != nil {
+		return 0, err
+	}
+	err = binary.Read(stream, binary.BigEndian, &count)
 	if err != nil {
 		return 0, err
 	}
@@ -347,8 +357,9 @@ func (f *BloomFilter) ReadFrom(stream io.Reader) (int64, error) {
 	}
 	f.m = uint(m)
 	f.k = uint(k)
+	f.count = count
 	f.b = b
-	return numBytes + int64(2*binary.Size(uint64(0))), nil
+	return numBytes + int64(3*binary.Size(uint64(0))), nil
 }
 
 // GobEncode implements gob.GobEncoder interface.
