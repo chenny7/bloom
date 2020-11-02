@@ -155,6 +155,11 @@ func (f *BloomFilter) Add(data []byte) *BloomFilter {
 	return f
 }
 
+func (f *BloomFilter) AddBatch(datas [][]byte) *BloomFilter {
+	f.SetLocationsBatch(f.LocationsBatch(datas))
+	return f
+}
+
 // Merge the data from two Bloom Filters.
 func (f *BloomFilter) Merge(g *BloomFilter) error {
 	// Make sure the m's and k's are the same, otherwise merging has no real use.
@@ -193,6 +198,10 @@ func (f *BloomFilter) Test(data []byte) bool {
 	return f.TestLocations(f.Locations(data))
 }
 
+func (f *BloomFilter) TestBatch(datas [][]byte) []bool {
+	return f.TestLocationsBatch(f.LocationsBatch(datas))
+}
+
 // TestString returns true if the string is in the BloomFilter, false otherwise.
 // If true, the result might be a false positive. If false, the data
 // is definitely not in the set.
@@ -214,12 +223,43 @@ func (f *BloomFilter) TestLocations(locs []uint) bool {
 	return true
 }
 
+func (f *BloomFilter) TestLocationsBatch(locsBatch [][]uint) []bool {
+	f.lock.RLock()
+	defer f.lock.RUnlock()
+
+	res := make([]bool, len(locsBatch))
+	for k := 0; k < len(locsBatch); k++ {
+		res[k] = true
+	}
+	for k := 0; k < len(locsBatch); k++ {
+		for i := 0; i < len(locsBatch[k]); i++ {
+			if !f.b.Test(locsBatch[k][i]) {
+				res[k] = false
+				break
+			}
+		}
+	}
+	return res
+}
+
 func (f *BloomFilter) SetLocations(locs []uint) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 
 	for i := 0; i < len(locs); i++ {
 		f.b.Set(locs[i])
+	}
+	f.count++
+}
+
+func (f *BloomFilter) SetLocationsBatch(locsBatch [][]uint) {
+	f.lock.Lock()
+	defer f.lock.Unlock()
+
+	for k := 0; k < len(locsBatch); k++ {
+		for i := 0; i < len(locsBatch[k]); i++ {
+			f.b.Set(locsBatch[k][i])
+		}
 	}
 	f.count++
 }
@@ -241,10 +281,36 @@ func (f *BloomFilter) TestAndSetLocations(locs []uint) bool {
 	return present
 }
 
+func (f *BloomFilter) TestAndSetLocationsBatch(locsBatch [][]uint) []bool {
+	f.lock.Lock()
+	defer f.lock.Unlock()
+
+	presents := make([]bool, len(locsBatch))
+	for k := 0; k < len(locsBatch); k++ {
+		presents[k] = true
+	}
+	for k := 0; k < len(locsBatch); k++ {
+		for i := 0; i < len(locsBatch[k]); i++ {
+			if !f.b.Test(locsBatch[k][i]) {
+				presents[k] = false
+				f.b.Set(locsBatch[k][i])
+			}
+		}
+		if !presents[k] {
+			f.count++
+		}
+	}
+	return presents
+}
+
 // TestAndAdd is the equivalent to calling Test(data) then Add(data).
 // Returns the result of Test.
 func (f *BloomFilter) TestAndAdd(data []byte) bool {
 	return f.TestAndSetLocations(f.Locations(data))
+}
+
+func (f *BloomFilter) TestAndAddBatch(datas [][]byte) []bool {
+	return f.TestAndSetLocationsBatch(f.LocationsBatch(datas))
 }
 
 // TestAndAddString is the equivalent to calling Test(string) then Add(string).
@@ -386,6 +452,14 @@ func (f *BloomFilter) GobDecode(data []byte) error {
 // Equal tests for the equality of two Bloom filters
 func (f *BloomFilter) Equal(g *BloomFilter) bool {
 	return f.m == g.m && f.k == g.k && f.b.Equal(g.b)
+}
+
+func (f *BloomFilter) LocationsBatch(datas [][]byte) [][]uint {
+	locsBatch := make([][]uint, len(datas))
+	for k := range datas {
+		locsBatch[k] = f.Locations(datas[k])
+	}
+	return locsBatch
 }
 
 // Locations returns a list of hash locations representing a data item.
