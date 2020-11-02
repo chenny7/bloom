@@ -260,8 +260,8 @@ func (f *BloomFilter) SetLocationsBatch(locsBatch [][]uint) {
 		for i := 0; i < len(locsBatch[k]); i++ {
 			f.b.Set(locsBatch[k][i])
 		}
+		f.count++
 	}
-	f.count++
 }
 
 func (f *BloomFilter) TestAndSetLocations(locs []uint) bool {
